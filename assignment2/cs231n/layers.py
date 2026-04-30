@@ -397,7 +397,7 @@ def layernorm_backward(dout, cache):
     dbeta = np.sum(dout,axis = 0)
     dgamma = np.sum(dout*x_hat,axis = 0)
     dxhat = dout*gamma
-    dx = inv_std * (dxhat - np.mean(dxhat,axis = 0) - x_hat*np.mean(dxhat*x_hat,axis = 0))
+    dx = inv_std * (dxhat - np.mean(dxhat,axis = 1,keepdims =True)-x_hat*np.mean(dxhat*x_hat,axis = 1,keepdims = True))
     ###########################################################################
     #                             END OF YOUR CODE                            #
     ###########################################################################

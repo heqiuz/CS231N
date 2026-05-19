@@ -36,7 +36,10 @@ class PositionalEncoding(nn.Module):
         # this is what the autograder is expecting. For reference, our solution is #
         # less than 5 lines of code.                                               #
         ############################################################################
-
+        position = torch.arange(0, max_len).unsqueeze(1)  # (max_len, 1). 添加新维度以广播
+        div_term = torch.exp(torch.arange(0, embed_dim, 2) * (-math.log(10000.0) / embed_dim))  # (embed_dim/2,)
+        pe[0, :, 0::2] = torch.sin(position * div_term)  # (max_len, embed_dim/2)
+        pe[0, :, 1::2] = torch.cos(position * div_term)  # (max_len, embed_dim/2)
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
@@ -64,7 +67,8 @@ class PositionalEncoding(nn.Module):
         # appropriate ones to the input sequence. Don't forget to apply dropout    #
         # afterward. This should only take a few lines of code.                    #
         ############################################################################
-
+        output = x + self.pe[:, :S, :]
+        output = self.dropout(output)
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
@@ -155,7 +159,20 @@ class MultiHeadAttention(nn.Module):
         #     prevent a value from influencing output. Specifically, the PyTorch   #
         #     function masked_fill may come in handy.                              #
         ############################################################################
-
+        q = self.query(query)
+        k = self.key(key)
+        v = self.value(value)
+        q = q.view(N, S, self.n_head, self.head_dim).transpose(1, 2)  # (N, H, S, E/H)
+        k = k.view(N, T, self.n_head, self.head_dim).transpose(1, 2)    # (N, H, T, E/H)
+        v = v.view(N, T, self.n_head, self.head_dim).transpose(1, 2)    # (N, H, T, E/H)
+        attn_scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(self.head_dim)  # (N, H, S, T) 每个batch每个head得到一个SxT的attention score矩阵
+        if attn_mask is not None:
+            attn_scores = attn_scores.masked_fill(attn_mask == 0, float('-inf')) #softmax（-inf）=0
+        attn_weights = F.softmax(attn_scores, dim=-1)  # (N, H, S, T)
+        attn_weights = self.attn_drop(attn_weights)
+        attn_output = torch.matmul(attn_weights, v)  # (N, H, S, E/H)
+        attn_output = attn_output.transpose(1, 2).contiguous().view(N, S, E)  # (N, S, E)
+        output = self.proj(attn_output)  # (N, S, E) 最后再过一个线性层
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
@@ -200,7 +217,7 @@ class FeedForwardNetwork(nn.Module):
 
 class TransformerDecoderLayer(nn.Module):
     """
-    A single layer of a Transformer decoder, to be used with TransformerDecoder.
+    A single layer of a Transformer decoder, to be used with TransformerDecoder.    
     """
     def __init__(self, input_dim, num_heads, dim_feedforward=2048, dropout=0.1):
         """
@@ -252,7 +269,17 @@ class TransformerDecoderLayer(nn.Module):
         # memory, and (2) the feedforward block. Each block should follow the      #
         # same structure as self-attention implemented just above.                 #
         ############################################################################
-
+        cross_shortcut = tgt
+        tgt = self.cross_attn(query=tgt, key=memory, value=memory)
+        tgt = self.dropout_cross(tgt)
+        tgt = tgt + cross_shortcut
+        tgt = self.norm_cross(tgt)
+        
+        ffn_shortcut = tgt
+        tgt = self.ffn(tgt)
+        tgt = self.dropout_ffn(tgt)
+        tgt = tgt + ffn_shortcut
+        tgt = self.norm_ffn(tgt)
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
@@ -302,7 +329,6 @@ class PatchEmbedding(nn.Module):
         assert H == self.img_size and W == self.img_size, \
             f"Expected image size ({self.img_size}, {self.img_size}), but got ({H}, {W})"
         out = torch.zeros(N, self.embed_dim)
-
         ############################################################################
         # TODO: Divide the image into non-overlapping patches of shape             #
         # (C x patch_size x patch_size), and rearrange them into a tensor of       #
@@ -311,7 +337,15 @@ class PatchEmbedding(nn.Module):
         # step. Once the patches are flattened, embed them into latent vectors     #
         # using the projection layer.                                              #
         ############################################################################
-
+        # Step 1: Reshape input to (N, C, num_patches_per_side, patch_size, num_patches_per_side, patch_size)
+        num_patches_per_side = self.img_size // self.patch_size
+        x = x.reshape(N, C, num_patches_per_side, self.patch_size, num_patches_per_side, self.patch_size)
+        # Step 2: Permute to (N, num_patches_per_side, num_patches_per_side, C, patch_size, patch_size)
+        x = x.permute(0, 2, 4, 1, 3, 5)
+        # Step 3: Reshape to (N, num_patches, patch_dim)
+        x = x.contiguous().view(N, self.num_patches, self.patch_dim)
+        # Step 4: Linear projection to (N, num_patches, embed_dim)
+        out = self.proj(x)
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
@@ -359,7 +393,17 @@ class TransformerEncoderLayer(nn.Module):
         # TODO: Implement the encoder layer by applying self-attention followed    #
         # by a feedforward block. This code will be very similar to decoder layer. #
         ############################################################################
-
+        shortcut = src
+        src = self.self_attn(query = src , key = src , value = src, attn_mask = src_mask)
+        src = self.dropout_self(src)
+        src = src + shortcut
+        src = self.norm_self(src)
+        
+        ffn_shortcut = src
+        src = self.ffn(src)
+        src =self.dropout_ffn(src)
+        src = src + ffn_shortcut
+        src = self.norm_ffn(src)
         ############################################################################
         #                             END OF YOUR CODE                             #
         ############################################################################
